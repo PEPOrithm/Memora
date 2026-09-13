@@ -210,6 +210,10 @@ const STRINGS = {
     apiKeyPlaceholder: "sk-ant-... / sk-... / AIza...",
     apiKeyHelp: "このアプリは選択したAIサービスへブラウザから直接アクセスします。キーはこの端末のブラウザ内だけに保存され、どこにも送信されません。",
     saveKeyBtn: "保存",
+    backupTitle: "データのバックアップ",
+    backupDescription: "デッキ、カード、復習記録、ノートを1つのファイルに保存します。AIのAPIキーは含まれません。",
+    exportBackupBtn: "バックアップを作成",
+    toastBackupCreated: "バックアップファイルを作成しました",
     loadingApp: "読み込み中…",
   },
   en: {
@@ -346,6 +350,10 @@ const STRINGS = {
     apiKeyPlaceholder: "sk-ant-... / sk-... / AIza...",
     apiKeyHelp: "This app connects directly from your browser to whichever AI service you choose. Your key is stored only in this browser and never sent anywhere else.",
     saveKeyBtn: "Save",
+    backupTitle: "Back up your data",
+    backupDescription: "Save your decks, cards, review history, and notes in one file. AI API keys are never included.",
+    exportBackupBtn: "Create backup",
+    toastBackupCreated: "Backup file created",
     loadingApp: "Loading…",
   },
 };
@@ -393,6 +401,8 @@ const DATA_KEY = "memora-data";
 const PROVIDER_KEY = "memora-ai-provider";
 const KEY_PREFIX = "memora-api-key-";
 const PROVIDERS = ["anthropic", "openai", "gemini"];
+const BACKUP_FORMAT = "memora-backup";
+const BACKUP_VERSION = 1;
 const DEFAULT_DATA = { decks: [], cards: [], reviewLog: [], theme: "light", lang: "ja", aiChat: [], pomodoro: { durationMin: 25, mode: "countdown" }, folders: [], notes: [] };
 
 function loadData() {
@@ -419,6 +429,19 @@ function loadApiKeys() {
 }
 function saveApiKey(provider, key) {
   try { localStorage.setItem(KEY_PREFIX + provider, key); } catch {}
+}
+function downloadBackup(data) {
+  // API keys deliberately live in separate localStorage entries and are never exported.
+  const backup = { format: BACKUP_FORMAT, version: BACKUP_VERSION, exportedAt: new Date().toISOString(), data };
+  const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `memora-backup-${todayISO()}.json`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
 }
 
 // ---------------------------------------------------------------------------
@@ -843,6 +866,7 @@ function Memora() {
       {modal?.type === "settings" && (
         <SettingsModal c={c} t={t} aiProvider={aiProvider} apiKeys={apiKeys}
           onCancel={() => setModal(null)}
+          onExport={() => { downloadBackup(data); showToast(t.toastBackupCreated); }}
           onSave={(provider, key) => {
             setAiProvider(provider); saveProvider(provider);
             setApiKeys((ks) => ({ ...ks, [provider]: key })); saveApiKey(provider, key);
@@ -1439,7 +1463,7 @@ function AiImageSuggestModal({ c, t, onCancel, onGenerate, state, onAddSelected 
   );
 }
 
-function SettingsModal({ c, t, aiProvider, apiKeys, onCancel, onSave }) {
+function SettingsModal({ c, t, aiProvider, apiKeys, onCancel, onSave, onExport }) {
   const [provider, setProvider] = useState(aiProvider || "anthropic");
   const [keysDraft, setKeysDraft] = useState(apiKeys || {});
   const providers = [
@@ -1475,6 +1499,11 @@ function SettingsModal({ c, t, aiProvider, apiKeys, onCancel, onSave }) {
       <div style={{ fontSize: 12.5, color: c.inkFaint, lineHeight: 1.5, marginBottom: 16 }}>{t.apiKeyHelp}</div>
       <ModalActions c={c} cancelLabel={t.cancel} onCancel={onCancel}
         onConfirm={() => onSave(provider, (keysDraft[provider] || "").trim())} confirmLabel={t.saveKeyBtn} />
+      <div style={{ borderTop: `1px solid ${c.border}`, marginTop: 22, paddingTop: 20 }}>
+        <div style={{ fontSize: 14, color: c.ink, fontWeight: 700, marginBottom: 6 }}>{t.backupTitle}</div>
+        <div style={{ fontSize: 12.5, color: c.inkFaint, lineHeight: 1.5, marginBottom: 12 }}>{t.backupDescription}</div>
+        <button className="memora-btn" onClick={onExport} style={{ background: "transparent", color: c.teal, border: `1px solid ${c.teal}`, borderRadius: 9, padding: "9px 13px", fontSize: 13, fontWeight: 600 }}>⇩ {t.exportBackupBtn}</button>
+      </div>
     </ModalShell>
   );
 }

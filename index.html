@@ -213,7 +213,12 @@ const STRINGS = {
     backupTitle: "データのバックアップ",
     backupDescription: "デッキ、カード、復習記録、ノートを1つのファイルに保存します。AIのAPIキーは含まれません。",
     exportBackupBtn: "バックアップを作成",
+    importBackupBtn: "バックアップを復元",
+    restoreWarning: "復元すると、現在この端末にある学習データは選んだバックアップの内容に置き換わります。先にバックアップを作成しておくことをおすすめします。",
+    confirmRestore: "現在の学習データを選んだバックアップで置き換えます。続けますか?",
     toastBackupCreated: "バックアップファイルを作成しました",
+    toastBackupRestored: "バックアップを復元しました",
+    backupRestoreError: "このファイルはMemoraのバックアップとして読み込めませんでした",
     loadingApp: "読み込み中…",
   },
   en: {
@@ -353,7 +358,12 @@ const STRINGS = {
     backupTitle: "Back up your data",
     backupDescription: "Save your decks, cards, review history, and notes in one file. AI API keys are never included.",
     exportBackupBtn: "Create backup",
+    importBackupBtn: "Restore backup",
+    restoreWarning: "Restoring replaces the learning data currently on this device with the selected backup. We recommend creating a backup first.",
+    confirmRestore: "Replace the current learning data with this backup?",
     toastBackupCreated: "Backup file created",
+    toastBackupRestored: "Backup restored",
+    backupRestoreError: "This file is not a valid Memora backup",
     loadingApp: "Loading…",
   },
 };
@@ -442,6 +452,39 @@ function downloadBackup(data) {
   link.click();
   link.remove();
   URL.revokeObjectURL(url);
+}
+function readBackup(backup) {
+  if (!backup || backup.format !== BACKUP_FORMAT || backup.version !== BACKUP_VERSION || !backup.data || typeof backup.data !== "object") {
+    throw new Error("invalid_backup");
+  }
+  const source = backup.data;
+  const requireRecords = (name) => {
+    if (!Array.isArray(source[name]) || source[name].some((item) => !item || typeof item !== "object" || typeof item.id !== "string")) throw new Error("invalid_backup");
+    const ids = source[name].map((item) => item.id);
+    if (new Set(ids).size !== ids.length) throw new Error("invalid_backup");
+    return source[name];
+  };
+  const decks = requireRecords("decks");
+  const cards = requireRecords("cards");
+  const folders = requireRecords("folders");
+  const notes = requireRecords("notes");
+  if (!Array.isArray(source.reviewLog)) throw new Error("invalid_backup");
+  const deckIds = new Set(decks.map((deck) => deck.id));
+  const folderIds = new Set(folders.map((folder) => folder.id));
+  if (cards.some((card) => !deckIds.has(card.deckId) || typeof card.front !== "string" || typeof card.back !== "string")) throw new Error("invalid_backup");
+  if (notes.some((note) => !folderIds.has(note.folderId) || !Array.isArray(note.pages))) throw new Error("invalid_backup");
+  return {
+    ...DEFAULT_DATA,
+    decks,
+    cards,
+    folders,
+    notes,
+    reviewLog: source.reviewLog,
+    aiChat: Array.isArray(source.aiChat) ? source.aiChat : [],
+    theme: source.theme === "dark" ? "dark" : "light",
+    lang: source.lang === "en" ? "en" : "ja",
+    pomodoro: source.pomodoro && typeof source.pomodoro === "object" ? { ...DEFAULT_DATA.pomodoro, ...source.pomodoro } : DEFAULT_DATA.pomodoro,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -630,6 +673,21 @@ function Memora() {
 
   function persist(next) { setDataState(next); saveData(next); }
   function showToast(msg) { setToast(msg); setTimeout(() => setToast(null), 2200); }
+  async function restoreBackup(file) {
+    try {
+      const backup = JSON.parse(await file.text());
+      const restored = readBackup(backup);
+      if (!window.confirm(t.confirmRestore)) return;
+      persist(restored);
+      setThemeMode(restored.theme);
+      setLang(restored.lang);
+      setView({ kind: "decks" });
+      setModal(null);
+      showToast(t.toastBackupRestored);
+    } catch {
+      showToast(t.backupRestoreError);
+    }
+  }
 
   const decks = data.decks, cards = data.cards;
   const dueCountForDeck = (id) => cards.filter((cd) => cd.deckId === id && isDue(cd)).length;
@@ -867,6 +925,7 @@ function Memora() {
         <SettingsModal c={c} t={t} aiProvider={aiProvider} apiKeys={apiKeys}
           onCancel={() => setModal(null)}
           onExport={() => { downloadBackup(data); showToast(t.toastBackupCreated); }}
+          onImport={restoreBackup}
           onSave={(provider, key) => {
             setAiProvider(provider); saveProvider(provider);
             setApiKeys((ks) => ({ ...ks, [provider]: key })); saveApiKey(provider, key);
@@ -1463,9 +1522,10 @@ function AiImageSuggestModal({ c, t, onCancel, onGenerate, state, onAddSelected 
   );
 }
 
-function SettingsModal({ c, t, aiProvider, apiKeys, onCancel, onSave, onExport }) {
+function SettingsModal({ c, t, aiProvider, apiKeys, onCancel, onSave, onExport, onImport }) {
   const [provider, setProvider] = useState(aiProvider || "anthropic");
   const [keysDraft, setKeysDraft] = useState(apiKeys || {});
+  const backupInputRef = useRef(null);
   const providers = [
     { id: "anthropic", label: "Anthropic (Claude)" },
     { id: "openai", label: "OpenAI (ChatGPT)" },
@@ -1502,7 +1562,12 @@ function SettingsModal({ c, t, aiProvider, apiKeys, onCancel, onSave, onExport }
       <div style={{ borderTop: `1px solid ${c.border}`, marginTop: 22, paddingTop: 20 }}>
         <div style={{ fontSize: 14, color: c.ink, fontWeight: 700, marginBottom: 6 }}>{t.backupTitle}</div>
         <div style={{ fontSize: 12.5, color: c.inkFaint, lineHeight: 1.5, marginBottom: 12 }}>{t.backupDescription}</div>
-        <button className="memora-btn" onClick={onExport} style={{ background: "transparent", color: c.teal, border: `1px solid ${c.teal}`, borderRadius: 9, padding: "9px 13px", fontSize: 13, fontWeight: 600 }}>⇩ {t.exportBackupBtn}</button>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button className="memora-btn" onClick={onExport} style={{ background: "transparent", color: c.teal, border: `1px solid ${c.teal}`, borderRadius: 9, padding: "9px 13px", fontSize: 13, fontWeight: 600 }}>⇩ {t.exportBackupBtn}</button>
+          <button className="memora-btn" onClick={() => backupInputRef.current?.click()} style={{ background: "transparent", color: c.gold, border: `1px solid ${c.gold}`, borderRadius: 9, padding: "9px 13px", fontSize: 13, fontWeight: 600 }}>⇧ {t.importBackupBtn}</button>
+          <input ref={backupInputRef} type="file" accept="application/json,.json" onChange={(e) => { const file = e.target.files?.[0]; e.target.value = ""; if (file) onImport(file); }} style={{ display: "none" }} />
+        </div>
+        <div style={{ fontSize: 12, color: c.inkFaint, lineHeight: 1.5, marginTop: 12 }}>{t.restoreWarning}</div>
       </div>
     </ModalShell>
   );
